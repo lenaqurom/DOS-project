@@ -118,6 +118,46 @@ def update_book(item_number):
     return jsonify({'error': 'Book not found'}), 404
 
 
+@app.route('/update_replica/<item_number>', methods=['PUT'])
+def update_replica_book(item_number):
+    data = request.get_json()
+
+    # This is a replica update request
+    for book_id, book in enumerate(catalog, start=1):
+        if str(book_id) == item_number:
+            # Save the current values for reference
+            old_quantity = book['Quantity']
+            old_price = book['Price']
+
+            # Update the book details
+            if 'quantity' in data:
+                new_quantity = data.get('quantity')
+                book['Quantity'] = str(new_quantity)
+            if 'price' in data:
+                new_price = data.get('price')
+                book['Price'] = str(new_price)
+
+            print(f"Replica {replica_server_id} on Port {replica_server_port}: Updated catalog content: {catalog}")
+
+            # Update the CSV file
+            save_catalog()
+
+            # If it's not a notification, notify other replicas
+            if not data.get('is_notification', False):
+                notify_replicas_update(item_number, old_quantity, old_price)
+
+            # Update the cache
+            cache.clear()
+
+            print(f"Replica {replica_server_id} on Port {replica_server_port}: Catalog saved successfully to 'catalog.csv'")
+            print(f"Replica {replica_server_id} on Port {replica_server_port}: Catalog content after saving: {catalog}")
+
+            print(f'Replica {replica_server_id} on Port {replica_server_port}: Book updated successfully (Replica)')
+            return jsonify({'message': 'Book updated successfully (Replica)'})
+
+    return jsonify({'error': 'Book not found'}), 404
+
+
 def notify_replicas_update(item_number, old_quantity, old_price):
     for port in [5000, 5003]:  # Update the list with ports of all replicas
         if port != replica_server_port:
