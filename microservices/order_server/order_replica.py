@@ -9,7 +9,7 @@ import sys
 app = Flask(__name__)
 
 # In order_replica.py
-CATALOG_SERVER_URL = os.environ.get('CATALOG_SERVER_URL', 'http://localhost:5003')
+CATALOG_SERVER_URL = os.environ.get('CATALOG_SERVER_URL', 'http://localhost:5000')
 
 # Initialize an in-memory cache for the order server with a maximum capacity of 100
 order_cache = {}
@@ -156,6 +156,6 @@ def purchase_book(item_number):
 
 if __name__ == '__main__':
     replica_server_id = 1
-    replica_server_port = 5004  # Port for the first replica
+    replica_server_port = 5004  # Port for the second replica
     print(f'Replica {replica_server_id} on Port {replica_server_port}: Order Server Running')
     app.run(host='0.0.0.0', port=replica_server_port, debug=True)
