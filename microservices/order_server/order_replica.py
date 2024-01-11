@@ -5,6 +5,7 @@ import os
 from datetime import datetime
 import threading
 import sys
+import time
 
 app = Flask(__name__)
 
@@ -31,11 +32,9 @@ def get_catalog():
         return None
 
 # Update the 'order.csv' file with the given orders
-def update_orders_csv(orders):
-    with open('order.csv', 'w', newline='') as csvfile:
-        # Extract fieldnames from the first line in orders (assuming orders is not empty)
+def update_orders_csv(orders, filename='order_replica.csv'):
+    with open(filename, 'w', newline='') as csvfile:
         fieldnames = list(orders[0].keys()) if orders else ['item_number', 'timestamp']
-
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(orders)
@@ -119,6 +118,27 @@ def get_book_info(item_number):
 
     return None
 
+@app.route('/notify_purchase/<item_number>', methods=['POST'])
+def notify_purchase(item_number):
+    try:
+        with lock:
+            orders = []
+            filename = 'order_replica.csv'
+            if os.path.exists(filename):
+                with open(filename, 'r') as csvfile:
+                    reader = csv.DictReader(csvfile)
+                    for row in reader:
+                        orders.append(row)
+
+
+            # Update the order file
+            update_orders_csv(orders, filename)
+
+            return jsonify({'message': f'Purchase notification received for item {item_number}'})
+
+    except Exception as e:
+        return jsonify({'error': f'Error processing purchase notification: {e}'}), 500
+
 # Purchase a book and update relevant files
 @app.route('/purchase/<item_number>', methods=['POST'])
 def purchase_book(item_number):
@@ -127,7 +147,7 @@ def purchase_book(item_number):
         return jsonify({'error': 'Book out of stock'})
 
     # Load order data from a CSV file
-    orders_csv_file = 'order.csv'
+    orders_csv_file = 'order_replica.csv'
     orders = []
 
     if os.path.exists(orders_csv_file):
