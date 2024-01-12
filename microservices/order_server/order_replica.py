@@ -39,6 +39,15 @@ def update_orders_csv(orders, filename='order_replica.csv'):
         writer.writeheader()
         writer.writerows(orders)
 
+def invalidate_frontend_cache(item_number):
+    try:
+        frontend_url = 'http://localhost:5002'  # Update with the actual URL of your frontend server
+        response = requests.post(f'{frontend_url}/invalidate_cache/{item_number}')
+        response.raise_for_status()
+        print(f'Cache invalidated successfully in the frontend server for item {item_number}')
+    except requests.exceptions.RequestException as e:
+        print(f"Error invalidating cache in the frontend server: {e}")
+
 def notify_catalog_server(item_number):
     # Verify if the book is in stock
     if not verify_stock(item_number):
@@ -170,7 +179,7 @@ def purchase_book(item_number):
 
     # Notify the catalog server about the purchase
     notify_catalog_server(item_number)
-
+    invalidate_frontend_cache(item_number)
     # Use 'get' method to avoid KeyError, and fetch the title using the book ID
     return jsonify({'message': f'Book {book.get("Title", "Unknown Title")} purchased successfully'})
 
