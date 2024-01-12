@@ -30,6 +30,15 @@ def save_catalog(local_catalog):
 
 load_catalog()
 
+def invalidate_frontend_cache(item_number):
+    try:
+        frontend_url = 'http://localhost:5002'  # Update with the actual URL of your frontend server
+        response = requests.post(f'{frontend_url}/invalidate_cache/{item_number}')
+        response.raise_for_status()
+        print(f'Cache invalidated successfully in the frontend server for item {item_number}')
+    except requests.exceptions.RequestException as e:
+        print(f"Error invalidating cache in the frontend server: {e}")
+
 # Notify other replicas about the update for a specific book
 def notify_replicas_update(item_number, old_quantity, old_price):
     for port in [5000, 5003]:  # Update the list with ports of all replicas
@@ -126,7 +135,7 @@ def update_book(item_number):
 
             # Update the CSV file
             save_catalog(local_catalog)
-
+            invalidate_frontend_cache(item_number)
             # If it's not a notification, notify other replicas
             if not data.get('is_notification', False):
                 notify_replicas_update(item_number, old_quantity, old_price)
