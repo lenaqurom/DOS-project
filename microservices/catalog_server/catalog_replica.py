@@ -12,10 +12,10 @@ cache = {}
 
 # Load catalog data from the 'catalog_replica.csv' file
 def load_catalog():
+    global catalog
     with open('catalog_replica.csv', 'r') as csvfile:
         reader = csv.DictReader(csvfile)
-        local_catalog = list(reader)
-    return local_catalog
+        catalog = list(reader)
 
 # Save catalog data to the 'catalog_replica.csv' file
 def save_catalog(local_catalog):
