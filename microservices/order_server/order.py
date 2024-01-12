@@ -30,6 +30,15 @@ def get_catalog():
         print(f"URL: {url}")
         return None
 
+def invalidate_frontend_cache(item_number):
+    try:
+        frontend_url = 'http://localhost:5002'  # Update with the actual URL of your frontend server
+        response = requests.post(f'{frontend_url}/invalidate_cache/{item_number}')
+        response.raise_for_status()
+        print(f'Cache invalidated successfully in the frontend server for item {item_number}')
+    except requests.exceptions.RequestException as e:
+        print(f"Error invalidating cache in the frontend server: {e}")
+
 # Update the 'order.csv' file with the given orders
 def update_orders_csv(orders, filename='order.csv'):  # Modified to accept filename
     with open(filename, 'w', newline='') as csvfile:
@@ -182,7 +191,7 @@ def purchase_book(item_number):
     # Update the 'order.csv' file
     update_orders_csv(orders)
     notify_other_replica(item_number, 'order_replica.csv')  # Notify the other replica
-
+    invalidate_frontend_cache(item_number)
     # Notify the catalog server about the purchase
     notify_catalog_server(item_number)
 
