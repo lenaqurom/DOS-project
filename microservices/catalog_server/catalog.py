@@ -3,6 +3,7 @@ from flask import Flask, jsonify, request
 import requests
 from multiprocessing import Process
 import sys
+from flask import current_app
 
 app = Flask(__name__)
 
@@ -28,17 +29,19 @@ def save_catalog():
 
 load_catalog()
 
-def notify_replicas():
-    for port in [5000, 5003]:  # Update the list with ports of all replicas
-        if port != replica_server_port:
-            try:
-                requests.post(f'http://localhost:{port}/notify', timeout=1)
-            except requests.exceptions.RequestException as e:
-                print(f"Error notifying replica on port {port}: {e}")
 
 # Replica server information
 replica_server_id = int(sys.argv[2]) if len(sys.argv) > 2 else 1
 replica_server_port = int(sys.argv[1]) if len(sys.argv) > 1 else 5000
+
+def invalidate_frontend_cache(item_number):
+    try:
+        frontend_url = 'http://localhost:5002'  # Update with the actual URL of your frontend server
+        response = requests.post(f'{frontend_url}/invalidate_cache/{item_number}')
+        response.raise_for_status()
+        print(f'Cache invalidated successfully in the frontend server for item {item_number}')
+    except requests.exceptions.RequestException as e:
+        print(f"Error invalidating cache in the frontend server: {e}")
 
 # Search for items in the catalog based on the provided item name (topic)
 @app.route('/search/<item_name>', methods=['GET'])
@@ -108,9 +111,11 @@ def update_book(item_number):
 
             # Notify other replicas about the update
             notify_replicas_update(item_number, old_quantity, old_price)
-
+            
             # Update the cache
             cache.clear()
+
+            invalidate_frontend_cache(item_number)
 
             print(f'Replica {replica_server_id} on Port {replica_server_port}: Book updated successfully')
             return jsonify({'message': 'Book updated successfully'})
@@ -164,7 +169,7 @@ def notify_replicas_update(item_number, old_quantity, old_price):
             try:
                 data = {'quantity': request.json.get('quantity', old_quantity),
                         'price': request.json.get('price', old_price)}
-                requests.put(f'http://localhost:{port}/update_replica/{item_number}', json=data, timeout=1)
+                requests.put(f'http://localhost:{port}/update_replica/{item_number}', json=data, timeout=10)
             except requests.exceptions.RequestException as e:
                 print(f"Error notifying replica on port {port}: {e}")
 
