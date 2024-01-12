@@ -16,7 +16,7 @@ def load_catalog():
     with open('catalog_replica.csv', 'r') as csvfile:
         reader = csv.DictReader(csvfile)
         catalog = list(reader)
-
+        return catalog
 # Save catalog data to the 'catalog_replica.csv' file
 def save_catalog(local_catalog):
     with open('catalog_replica.csv', 'w', newline='') as csvfile:
