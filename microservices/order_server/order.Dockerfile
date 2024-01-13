@@ -11,7 +11,6 @@ RUN apt-get update && \
 # Copy the current directory contents into the container at /home
 COPY /microservices/order_server/order.py .
 COPY /microservices/order_server/order.csv .
-COPY /microservices/catalog_server/catalog.csv .
 
 # Install Flask and requests
 RUN pip3 install flask requests

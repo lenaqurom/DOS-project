@@ -3,75 +3,130 @@ import csv
 import requests
 import os
 from datetime import datetime
+import threading
 
 app = Flask(__name__)
 
-CATALOG_SERVER_URL = os.environ.get('CATALOG_SERVER_URL', 'http://172.19.0.2:5000')
-CATALOG_CSV_FILE = '../microservices/catalog_server/catalog.csv'
+CATALOG_SERVER_URL = os.environ.get('CATALOG_SERVER_URL', 'http://localhost:5000')
+REPLICA_SERVER_URL = os.environ.get('REPLICA_SERVER_URL', 'http://localhost:5004')
+
+# Threading and shared resources
+lock = threading.Lock()
 
 # Retrieve catalog information from the catalog server
 def get_catalog():
     try:
         url = f'{CATALOG_SERVER_URL}/catalog'
         response = requests.get(url)
-        response.raise_for_status()  # Raise an HTTPError for bad responses
+        response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
         print(f"Error connecting to catalog server: {e}")
         print(f"URL: {url}")
         return None
 
-# Update the 'order.csv' file with the given orders
-def update_orders_csv(orders):
-    with open('order.csv', 'w', newline='') as csvfile:
-        # Extract fieldnames from the first line in orders (assuming orders is not empty)
-        fieldnames = list(orders[0].keys()) if orders else ['item_number', 'timestamp']
+# Notify the catalog server about the purchase and update stock quantity
+def notify_catalog_server(item_number):
+    try:
+        catalog = get_catalog()
 
+        if catalog is None:
+            return jsonify({'error': 'Error retrieving catalog information'})
+
+        for book in catalog:
+            if str(book['ID']) == item_number:
+                current_quantity = int(book.get('Quantity', 0))
+                if current_quantity > 0:
+                    update_response = requests.put(f'{CATALOG_SERVER_URL}/update/{item_number}', json={'quantity': current_quantity - 1})
+
+                    if update_response.status_code == 200:
+                        print(f"Catalog server updated successfully: {update_response.json()['message']}")
+                    else:
+                        print(f"Error updating catalog server: {update_response.json()['error']}")
+                    return jsonify({'message': f'Book {book.get("Title", "Unknown Title")} purchased successfully'})
+
+                else:
+                    return jsonify({'error': 'Book out of stock'})
+
+        return jsonify({'error': 'Book not found'}), 404
+
+    except requests.exceptions.RequestException as e:
+        print(f"Error connecting to catalog server: {e}")
+        return jsonify({'error': f'Error connecting to catalog server: {e}'}), 500
+
+# Verify if the book with a given ID is in stock
+def verify_stock(item_id):
+    try:
+        url = f'{CATALOG_SERVER_URL}/verify/{item_id}'
+        response = requests.post(url)
+        response.raise_for_status()
+        result = response.json()
+
+        if 'message' in result and result['message'] == 'Book is in stock':
+            return True
+        else:
+            return False
+
+    except requests.exceptions.RequestException as e:
+        print(f"Error verifying stock with catalog server: {e}")
+        print(f"URL: {url}")
+        return False
+
+# Invalidate the cache in the frontend server for the given item number
+def invalidate_frontend_cache(item_number):
+    try:
+        frontend_url = 'http://localhost:5002'
+        response = requests.post(f'{frontend_url}/invalidate_cache/{item_number}')
+        response.raise_for_status()
+        print(f'Cache invalidated successfully in the frontend server for item {item_number}')
+    except requests.exceptions.RequestException as e:
+        print(f"Error invalidating cache in the frontend server: {e}")
+
+# Update the 'order.csv' file with the given orders
+def update_orders_csv(orders, filename='order.csv'):
+    with open(filename, 'w', newline='') as csvfile:
+        fieldnames = list(orders[0].keys()) if orders else ['item_number', 'timestamp']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(orders)
 
-# Notify the catalog server about the update
-def notify_catalog_server():
+# Notify the other replica about the purchase and update the order file
+def notify_other_replica(item_number, filename='order_replica.csv'):
     try:
-        url = f'{CATALOG_SERVER_URL}/notify'
-        response = requests.post(url)
-        response.raise_for_status()
-        print(response.json())
-    except requests.exceptions.RequestException as e:
-        print(f"Error notifying catalog server: {e}")
-        print(f"URL: {url}")
+        with lock:
+            orders = []
+            if os.path.exists(filename):
+                with open(filename, 'r') as csvfile:
+                    reader = csv.DictReader(csvfile)
+                    for row in reader:
+                        orders.append(row)
 
-# Update the 'catalog.csv' file with the modified catalog information
-def update_catalog_csv(catalog, catalog_csv_file, item_number):
-    # Read the existing content of the catalog CSV file
-    existing_catalog = []
-    try:
-        with open(catalog_csv_file, 'r', newline='') as csvfile:
-            reader = csv.DictReader(csvfile)
-            existing_catalog = list(reader)
-    except FileNotFoundError:
-        pass
+            catalog = get_catalog()
+            if catalog is None:
+                return jsonify({'error': 'Error retrieving catalog information'})
 
-    # Update the quantity of the purchased book
-    for existing_book in existing_catalog:
-        if existing_book['ID'] == item_number:
-            current_quantity = int(existing_book['Quantity'])
-            new_quantity = max(0, current_quantity - 1)  # Decrease the quantity by 1
-            existing_book['Quantity'] = str(new_quantity)
-            break  # Break out of the loop once the book is found and updated
+            for book in catalog:
+                if str(book['ID']) == item_number:
+                    orders.append({'item_number': item_number, 'timestamp': datetime.utcnow().isoformat()})
+                    update_orders_csv(orders, filename)
 
-    # Write the modified content back to the catalog CSV file
-    with open(catalog_csv_file, 'w', newline='') as csvfile:
-        fieldnames = ['ID', 'Title', 'Quantity', 'Price', 'Topic']
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(existing_catalog)
-        
+                    other_replica_url = f'{REPLICA_SERVER_URL}/notify_purchase/{item_number}'
+                    response = requests.post(other_replica_url)
+                    response.raise_for_status()
+
+                    return jsonify({'message': f'Book {book.get("Title", "Unknown Title")} purchased successfully'})
+
+        return jsonify({'error': 'Book not found in the catalog'})
+
+    except Exception as e:
+        return jsonify({'error': f'Error notifying other replica: {e}'}), 500
+
 # Purchase a book and update relevant files
 @app.route('/purchase/<item_number>', methods=['POST'])
 def purchase_book(item_number):
-    # Load order data from a CSV file
+    if not verify_stock(item_number):
+        return jsonify({'error': 'Book out of stock'})
+
     orders_csv_file = 'order.csv'
     orders = []
 
@@ -82,33 +137,24 @@ def purchase_book(item_number):
                 orders.append(row)
 
     catalog = get_catalog()
-
     if catalog is None:
-        return jsonify({'error': 'Unable to retrieve catalog information'})
-
-    found = False
+        return jsonify({'error': 'Error retrieving catalog information'})
 
     for book in catalog:
         if str(book['ID']) == item_number:
-            found = True
-            current_quantity = int(book.get('Quantity', 0))
-            if current_quantity > 0:
-                book['Quantity'] = str(current_quantity - 1)
-                # Record the purchase in the orders list
-                orders.append({'item_number': item_number, 'timestamp': datetime.utcnow().isoformat()})
-                # Update the 'order.csv' file
-                update_orders_csv(orders)
-                # Update the 'catalog.csv' file in the specified directory
-                update_catalog_csv(catalog, CATALOG_CSV_FILE, item_number)
-                # Notify the catalog server about the update
-                notify_catalog_server()
-                # Use 'get' method to avoid KeyError, and fetch the title using the book ID
-                return jsonify({'message': f'Book {book.get("Title", "Unknown Title")} purchased successfully'})
-            else:
-                return jsonify({'error': 'Book out of stock'})
+            orders.append({'item_number': item_number, 'timestamp': datetime.utcnow().isoformat()})
+            update_orders_csv(orders)
+            notify_other_replica(item_number, 'order_replica.csv')
+            invalidate_frontend_cache(item_number)
+            notify_catalog_server(item_number)
 
-    if not found:
-        return jsonify({'error': 'Book not found in the catalog'})
+            return jsonify({'message': f'Book {book.get("Title", "Unknown Title")} purchased successfully'})
+
+    return jsonify({'error': 'Book not found in the catalog'})
+
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    replica_server_id = 1
+    replica_server_port = 5001
+    print(f'Replica {replica_server_id} on Port {replica_server_port}: Order Server Running')
+    app.run(host='0.0.0.0', port=replica_server_port, debug=True)
