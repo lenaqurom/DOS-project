@@ -4,34 +4,24 @@ import requests
 import os
 from datetime import datetime
 import threading
-import sys
-import time
 
 app = Flask(__name__)
 
-# In order_replica.py
 CATALOG_SERVER_URL = os.environ.get('CATALOG_SERVER_URL', 'http://localhost:5000')
 
-# Initialize an in-memory cache for the order server with a maximum capacity of 100
-order_cache = {}
-MAX_CACHE_SIZE = 100
-
-# Lock to synchronize access to shared resources
-lock = threading.Lock()
-
-# Retrieve catalog information from the catalog server
+# retrieve catalog information from the catalog server
 def get_catalog():
     try:
         url = f'{CATALOG_SERVER_URL}/catalog'
         response = requests.get(url)
-        response.raise_for_status()  # Raise an HTTPError for bad responses
+        response.raise_for_status()  
         return response.json()
     except requests.exceptions.RequestException as e:
         print(f"Error connecting to catalog server: {e}")
         print(f"URL: {url}")
         return None
 
-# Update the 'order.csv' file with the given orders
+# update the 'order_replica.csv' file with the given orders
 def update_orders_csv(orders, filename='order_replica.csv'):
     with open(filename, 'w', newline='') as csvfile:
         fieldnames = list(orders[0].keys()) if orders else ['item_number', 'timestamp']
@@ -39,15 +29,17 @@ def update_orders_csv(orders, filename='order_replica.csv'):
         writer.writeheader()
         writer.writerows(orders)
 
+# invalidate the cache in the frontend server for a specific item
 def invalidate_frontend_cache(item_number):
     try:
-        frontend_url = 'http://localhost:5002'  # Update with the actual URL of your frontend server
+        frontend_url = 'http://localhost:5002'  
         response = requests.post(f'{frontend_url}/invalidate_cache/{item_number}')
         response.raise_for_status()
         print(f'Cache invalidated successfully in the frontend server for item {item_number}')
     except requests.exceptions.RequestException as e:
         print(f"Error invalidating cache in the frontend server: {e}")
 
+# notify the catalog server about a purchase
 def notify_catalog_server(item_number):
     # Verify if the book is in stock
     if not verify_stock(item_number):
@@ -80,7 +72,7 @@ def notify_catalog_server(item_number):
 
     return jsonify({'error': 'Book not found'}), 404
 
-# Verify if the book with a given ID is in stock
+# verify if the book with a given ID is in stock
 def verify_stock(item_id):
     try:
         url = f'{CATALOG_SERVER_URL}/verify/{item_id}'
@@ -98,57 +90,26 @@ def verify_stock(item_id):
         print(f"URL: {url}")
         return False
 
-# Retrieve book information from the cache or the catalog server
-def get_book_info(item_number):
-    # Check if the book information is already in the cache
-    if item_number in order_cache:
-        print(f'Replica {replica_server_id} on Port {replica_server_port}: Order Cache Hit! Item Number: {item_number}, Cache Capacity: {len(order_cache)}/{MAX_CACHE_SIZE}')
-        return order_cache[item_number]
-
-    # Retrieve the catalog information from the catalog server
-    catalog = get_catalog()
-
-    if catalog is None:
-        return None
-
-    # Find the book with the specified item number
-    for book in catalog:
-        if str(book['ID']) == item_number:
-            # Cache the book information for future requests
-            order_cache[item_number] = book
-
-            # Ensure the cache size does not exceed the maximum capacity
-            if len(order_cache) > MAX_CACHE_SIZE:
-                oldest_item = next(iter(order_cache))
-                del order_cache[oldest_item]
-
-            print(f'Replica {replica_server_id} on Port {replica_server_port}: Order Cache Miss! Item Number: {item_number}, Cache Capacity: {len(order_cache)}/{MAX_CACHE_SIZE}')
-            return book
-
-    return None
-
+# handle purchase notifications
 @app.route('/notify_purchase/<item_number>', methods=['POST'])
 def notify_purchase(item_number):
     try:
-        with lock:
-            orders = []
-            filename = 'order_replica.csv'
-            if os.path.exists(filename):
-                with open(filename, 'r') as csvfile:
-                    reader = csv.DictReader(csvfile)
-                    for row in reader:
-                        orders.append(row)
+        orders = []
+        filename = 'order_replica.csv'
+        if os.path.exists(filename):
+            with open(filename, 'r') as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader:
+                    orders.append(row)
 
+        update_orders_csv(orders, filename)
 
-            # Update the order file
-            update_orders_csv(orders, filename)
-
-            return jsonify({'message': f'Purchase notification received for item {item_number}'})
+        return jsonify({'message': f'Purchase notification received for item {item_number}'})
 
     except Exception as e:
         return jsonify({'error': f'Error processing purchase notification: {e}'}), 500
 
-# Purchase a book and update relevant files
+# handle book purchases and update relevant files
 @app.route('/purchase/<item_number>', methods=['POST'])
 def purchase_book(item_number):
     # Verify if the book is in stock
@@ -165,26 +126,30 @@ def purchase_book(item_number):
             for row in reader:
                 orders.append(row)
 
-    # Retrieve book information from the cache or the catalog server
-    book = get_book_info(item_number)
+    # Retrieve book information from the catalog server
+    catalog = get_catalog()
 
-    if book is None:
-        return jsonify({'error': 'Book not found in the catalog'})
+    if catalog is None:
+        return jsonify({'error': 'Error retrieving catalog information'})
 
-    # Record the purchase in the orders list
-    orders.append({'item_number': item_number, 'timestamp': datetime.utcnow().isoformat()})
-    
-    # Update the 'order.csv' file
-    update_orders_csv(orders)
+    # Find the book with the specified item number
+    for book in catalog:
+        if str(book['ID']) == item_number:
+            # Record the purchase in the orders list
+            orders.append({'item_number': item_number, 'timestamp': datetime.utcnow().isoformat()})
+            
+            update_orders_csv(orders)
+            
+            notify_catalog_server(item_number)
+            
+            invalidate_frontend_cache(item_number)
+            
+            return jsonify({'message': f'Book {book.get("Title", "Unknown Title")} purchased successfully'})
 
-    # Notify the catalog server about the purchase
-    notify_catalog_server(item_number)
-    invalidate_frontend_cache(item_number)
-    # Use 'get' method to avoid KeyError, and fetch the title using the book ID
-    return jsonify({'message': f'Book {book.get("Title", "Unknown Title")} purchased successfully'})
+    return jsonify({'error': 'Book not found in the catalog'})
 
 if __name__ == '__main__':
     replica_server_id = 1
-    replica_server_port = 5004  # Port for the second replica
+    replica_server_port = 5004  
     print(f'Replica {replica_server_id} on Port {replica_server_port}: Order Server Running')
     app.run(host='0.0.0.0', port=replica_server_port, debug=True)
