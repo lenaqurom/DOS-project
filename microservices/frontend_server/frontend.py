@@ -35,14 +35,22 @@ def get_next_order_server():
     order_index = (order_index + 1) % len(ORDER_SERVER_URLS)
     return ORDER_SERVER_URLS[order_index]
 
+# Measure time taken
+def measure_time():
+    return time.time()
+
 # Invalidate cache for a specific item number.
 @app.route('/invalidate_cache/<item_number>', methods=['POST'])
 def invalidate_cache(item_number):
     global cache
     try:
+        start_time = measure_time()  # Record the start time
+
         if item_number in cache:
             cache.pop(item_number)
             print(f'Cache invalidated successfully for item {item_number}')
+            end_time = measure_time()  # Record the end time
+            print(f'Time Taken for Cache Invalidation: {end_time - start_time:.5f} seconds')
             return jsonify({'message': f'Cache invalidated successfully for item {item_number}'})
         else:
             return jsonify({'error': f'Item {item_number} not found in cache'}), 404
