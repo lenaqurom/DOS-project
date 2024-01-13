@@ -1,20 +1,15 @@
 import csv
 from flask import Flask, jsonify, request
 import requests
-from multiprocessing import Process
-import sys
-from flask import current_app
 
 app = Flask(__name__)
 
 # Load catalog data from a CSV file
 catalog = []
-cache = {}
 
 # Load catalog data from the 'catalog.csv' file
 def load_catalog():
-    global catalog  # Use the global variable
-
+    global catalog  
     with open('catalog.csv', 'r') as csvfile:
         reader = csv.DictReader(csvfile)
         catalog = list(reader)
@@ -29,14 +24,10 @@ def save_catalog():
 
 load_catalog()
 
-
-# Replica server information
-replica_server_id = int(sys.argv[2]) if len(sys.argv) > 2 else 1
-replica_server_port = int(sys.argv[1]) if len(sys.argv) > 1 else 5000
-
+# Invalidate the cache in the frontend server for the given item number
 def invalidate_frontend_cache(item_number):
     try:
-        frontend_url = 'http://localhost:5002'  # Update with the actual URL of your frontend server
+        frontend_url = 'http://localhost:5002'  
         response = requests.post(f'{frontend_url}/invalidate_cache/{item_number}')
         response.raise_for_status()
         print(f'Cache invalidated successfully in the frontend server for item {item_number}')
@@ -46,10 +37,6 @@ def invalidate_frontend_cache(item_number):
 # Search for items in the catalog based on the provided item name (topic)
 @app.route('/search/<item_name>', methods=['GET'])
 def search_items(item_name):
-    if item_name in cache:
-        print(f'Replica {replica_server_id} on Port {replica_server_port}: Catalog Search Cache Hit! Item Name: {item_name}, Cache Capacity: {len(cache)}/100')
-        return jsonify(cache[item_name])
-
     results = []
     for book_id, book in enumerate(catalog, start=1):
         if item_name.lower() in book.get('Topic', '').lower():
@@ -58,21 +45,12 @@ def search_items(item_name):
                 'title': book['Title']
             })
 
-    # Update the cache
-    if len(cache) >= 100:
-        cache.popitem(last=False)  # Remove the least recently used item
-
-    cache[item_name] = results
-    print(f'Replica {replica_server_id} on Port {replica_server_port}: Catalog Search Cache Miss! Item Name: {item_name}, Cache Capacity: {len(cache)}/100')
+    print(f'Replica {replica_server_id} on Port {replica_server_port}: Catalog Search! Item Name: {item_name}')
     return jsonify(results)
 
 # Retrieve information about a book based on the provided item number
 @app.route('/info/<item_number>', methods=['GET'])
 def book_info(item_number):
-    if item_number in cache:
-        print(f'Replica {replica_server_id} on Port {replica_server_port}: Catalog Info Cache Hit! Item Number: {item_number}, Cache Capacity: {len(cache)}/100')
-        return jsonify(cache[item_number])
-
     for book_id, book in enumerate(catalog, start=1):
         if str(book_id) == item_number:
             result = {
@@ -80,12 +58,7 @@ def book_info(item_number):
                 'quantity': int(book['Quantity']),
                 'price': float(book['Price'])
             }
-            # Update the cache
-            if len(cache) >= 100:
-                cache.popitem(last=False)  # Remove the least recently used item
-
-            cache[item_number] = result
-            print(f'Replica {replica_server_id} on Port {replica_server_port}: Catalog Info Cache Miss! Item Number: {item_number}, Cache Capacity: {len(cache)}/100')
+            print(f'Replica {replica_server_id} on Port {replica_server_port}: Catalog Info! Item Number: {item_number}')
             return jsonify(result)
 
     return jsonify({'error': 'Book not found'})
@@ -94,7 +67,7 @@ def book_info(item_number):
 def update_book(item_number):
     for book_id, book in enumerate(catalog, start=1):
         if str(book_id) == item_number:
-            # Save the current values for reference
+
             old_quantity = book['Quantity']
             old_price = book['Price']
 
@@ -112,9 +85,6 @@ def update_book(item_number):
             # Notify other replicas about the update
             notify_replicas_update(item_number, old_quantity, old_price)
             
-            # Update the cache
-            cache.clear()
-
             invalidate_frontend_cache(item_number)
 
             print(f'Replica {replica_server_id} on Port {replica_server_port}: Book updated successfully')
@@ -151,12 +121,6 @@ def update_replica_book(item_number):
             if not data.get('is_notification', False):
                 notify_replicas_update(item_number, old_quantity, old_price)
 
-            # Update the cache
-            cache.clear()
-
-            print(f"Replica {replica_server_id} on Port {replica_server_port}: Catalog saved successfully to 'catalog.csv'")
-            print(f"Replica {replica_server_id} on Port {replica_server_port}: Catalog content after saving: {catalog}")
-
             print(f'Replica {replica_server_id} on Port {replica_server_port}: Book updated successfully (Replica)')
             return jsonify({'message': 'Book updated successfully (Replica)'})
 
@@ -164,7 +128,7 @@ def update_replica_book(item_number):
 
 
 def notify_replicas_update(item_number, old_quantity, old_price):
-    for port in [5000, 5003]:  # Update the list with ports of all replicas
+    for port in [5000, 5003]: 
         if port != replica_server_port:
             try:
                 data = {'quantity': request.json.get('quantity', old_quantity),
@@ -188,13 +152,9 @@ def notify_update():
         sender = data.get('sender')
         print(f'Received update notification for item {item_number} from replica on port {sender}')
         
-        # Load the catalog from the 'catalog_replica.csv' file
         load_catalog()
         
-        # Update the cache
-        cache.clear()
-        
-        # Save the updated catalog to the 'catalog_replica.csv' file
+        # Save the updated catalog to the catalog_replica.csv file
         save_catalog()
         
         print(f'Replica {replica_server_id} on Port {replica_server_port}: Catalog updated successfully (Replica) for item {item_number}')
@@ -221,6 +181,6 @@ def run_app(port):
 
 if __name__ == '__main__':
     replica_server_id = 1
-    replica_server_port = 5000  # Port for the first replica
+    replica_server_port = 5000  
     print(f'Replica {replica_server_id} on Port {replica_server_port}: Catalog Server Running on Port {replica_server_port}')
     app.run(host='0.0.0.0', port=replica_server_port, debug=True)
